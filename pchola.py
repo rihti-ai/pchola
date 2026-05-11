@@ -8,7 +8,6 @@ import json
 from discord.ui import View, Button
 import sqlite3
 import yt_dlp
-import asyncio
 import requests
 from io import BytesIO
 import base64
@@ -17,11 +16,24 @@ import os
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import textwrap
-import aiohttp
-from io import BytesIO
 from openai import AsyncOpenAI
+import dotenv
+from pathlib import Path
 
+# Загружаем переменные из .env файла
+env_path = Path('.') / '.env'
+if env_path.exists():
+    from dotenv import load_dotenv
+    load_dotenv(env_path)
 
+# Инициализируем Groq клиент
+groq_client = AsyncOpenAI(
+    api_key=os.getenv("GROQ_API_KEY", ""),
+    base_url="https://api.groq.com/openai/v1"
+)
+
+ai_history = {}
+ai_system_prompt = "Ты милый гей фембой который использует эмодзи сердечек и ~. Первый пример сообщений: ₊˚⊹ д-д-даа 💝 (˘︶˘) ◡ ω ◡ ₊˚⊹мурлычет. Второй пример: ❤️ д-давай б-быстрее ✨ (˘︶˘)  :3 ⊰хихикает. Третий пример: ✧･ 💖 з-заадааниие делай🐇 (つ≧▽≦)つ  OwO ♪подмигивает"
 
 # =========================
 # 🗄️ БАЗА ДАННЫХ
@@ -95,10 +107,12 @@ def save_data():
         "playlists": playlists,
         "autodel_settings": autodel_settings,
         "copied_messages": copied_messages,
-	      "relationships": relationships,
-	      "love_points": love_points,
-	      "pregnancy": pregnancy,
-	      "children": children,
+        "ai_history": ai_history,
+        "relationships": relationships,
+        "love_points": love_points,
+        "pregnancy": pregnancy,
+        "children": children,
+        "ai_system_prompt": ai_system_prompt
     }
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
@@ -118,10 +132,12 @@ def load_data():
         playlists = data.get("playlists", {})
         autodel_settings = data.get("autodel_settings", {})
         copied_messages = data.get("copied_messages", {})
-	      relationships = data.get("relationships", {})
-	      love_points = data.get("love_points", {})
-	      pregnancy = data.get("pregnancy", {})
-	      children = data.get("children", {})
+        ai_history = data.get("ai_history", {})
+        relationships = data.get("relationships", {})
+        love_points = data.get("love_points", {})
+        pregnancy = data.get("pregnancy", {})
+        children = data.get("children", {})
+        ai_system_prompt = data.get("ai_system_prompt", ai_system_prompt)
     except:
         coins = {}
         inventory = {}
@@ -230,7 +246,7 @@ action_phrases = [
 for_admin = {
     ("чо ряльн", "чо ряльна", "чо реально", "правдо что ле",
      "правда что ле", "правда что ли", "правда что ле"): [
-        "Ои прастите, ета непрафто", "Нед йа пашутил азазазаз"
+        "Ои прастите, ета непрафто", "Нед йа пашутил азазazaz"
     ],
 }
 
@@ -247,18 +263,18 @@ auto_replies = {
 
 replies_admin = {
     ("иди нахуи", "ити нахуи", "иди нохуи", "ити нохуи", "иде нахуи", "ите нахуи"): [
-        "Доо пусд идет нахуи он", "Азазазазаз доооо", "Ряльн суга"
+        "Доо пусд идет нахуи он", "Азazazazaz доооо", "Ряльн суга"
     ],
     ("префет", "превет", "привет", "прифет"): ["префед", "хай"],
     ("аеро нуп", "аеросегс нуп", "аеросикс нуп", "аеросогс нуп", "аеросекс нуп"): [
-        "Дооо", "Сагласен", "азазазаз ряльн", "фр бро фр"
+        "Дооо", "Сагласен", "azazazaza ряльн", "фр бро фр"
     ],
     ("аеро про", "аеросегс про", "аеросикс про", "аеросогс про", "аеросекс про"): [
         "50 на 50 йа тумаю", "ну наверна да"
     ],
     ("кто я",): ["Мастир", "Крутои ряльн"],
     ("все нупи", "все нупы", "вси нупи", "вси нупы", "все нюпы", "все нюпи", "вси нюпы", "вси нюпи"): [
-        "савали епало", "толька ти"
+        "savali epalo", "tolyka ti"
     ]
 }
 
@@ -268,7 +284,7 @@ replies_relz = {
     ],
     ("префет", "превет", "привет", "прифет"): ["префед рилзи", "хай пидиди"],
     ("аеро нуп", "аеросегс нуп", "аеросикс нуп", "аеросогс нуп", "аеросекс нуп"): [
-        "Дооо", "Сагласен", "азазазаз ряльн", "фр бро фр"
+        "Дооо", "Сагласен", "azazazaza ряльн", "фр бро фр"
     ],
     ("аеро про", "аеросегс про", "аеросикс про", "аеросогс про", "аеросекс про"): ["Пачти каг релс", "Релс лучш"],
     ("кто я",): ["Релси", "Пидиди"],
@@ -484,7 +500,7 @@ async def on_message(message):
         )
 
         await message.channel.send(text)
-        return  # ← добавь это
+        return
 
     if message.content.startswith(bot.command_prefix):
         await bot.process_commands(message)
@@ -556,7 +572,7 @@ async def on_message(message):
     # 🤖 УМНЫЙ СЛУЧАЙНЫЙ ОТВЕТ С КАРТИНКОЙ
     # =========================
 
-    SMART_REPLY_CHANCE = 109  # шанс 1 к 100
+    SMART_REPLY_CHANCE = 109
 
     if random.randint(1, SMART_REPLY_CHANCE) == 1:
         try:
@@ -1042,11 +1058,10 @@ async def buy(ctx: discord.Interaction, item: str, word: str = "", answer: str =
 
 
 # =========================
-# 🎵 МУЗЫКА
+# 🎵 МУЗЫКА (УПРОЩЁННАЯ ВЕРСИЯ ДЛЯ RAILWAY)
 # =========================
 
 loop_music = False
-
 
 @bot.command()
 async def loop(ctx):
@@ -1074,8 +1089,7 @@ YDL_OPTIONS = {
 
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn",
-    "executable": "C:/Users/Алина/Downloads/ffmpeg-master-latest-win64-gpl-shared/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe"
+    "options": "-vn"
 }
 
 
@@ -1645,393 +1659,18 @@ async def copy_delete(interaction: discord.Interaction, name: str):
     await interaction.response.send_message(f"✅ `{name}` и все его файлы удалены!", ephemeral=True)
 
 
-@bot.command(name="jpg")
-async def jpg_cmd(ctx, *, custom_text: str = None):
-
-    if ctx.message.reference:
-        try:
-            ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            author = ref_msg.author
-            text = custom_text if custom_text else ref_msg.content
-        except:
-            return await ctx.send("❌ Не могу найти сообщение!")
-    else:
-        author = ctx.author
-        text = custom_text
-
-    if not text:
-        return await ctx.send("❌ Нет текста!")
-
-    # Скачиваем аватарку
-    avatar_url = author.display_avatar.url
-    async with aiohttp.ClientSession() as session:
-        async with session.get(avatar_url) as resp:
-            avatar_data = await resp.read()
-
-    # === НАСТРОЙКИ (максимально близко к Discord) ===
-    scale = 2  # Рендерим в 2x для чёткости
-    width = 800 * scale
-    avatar_size = 40 * scale
-    padding_left = 16 * scale
-    padding_right = 16 * scale
-    padding_top = 8 * scale  # Discord использует меньший отступ сверху
-    padding_bottom = 8 * scale
-    padding_between = 4 * scale  # отступ между сообщениями
-    name_size = 16 * scale
-    text_size = 15 * scale  # В Discord текст чуть меньше имени
-    time_size = 11 * scale
-    avatar_gap = 16 * scale  # Отступ между аватаркой и текстом
-
-    # Шрифты
-    import os
-    font_path = os.path.dirname(os.path.abspath(__file__))
-    try:
-        font_bold = ImageFont.truetype(os.path.join(font_path, "NotoSans-SemiBold.ttf"), name_size)
-        font_text = ImageFont.truetype(os.path.join(font_path, "NotoSans-Regular.ttf"), text_size)
-        font_time = ImageFont.truetype(os.path.join(font_path, "NotoSans-Regular.ttf"), time_size)
-    except Exception as e:
-        print(f"Ошибка шрифта: {e}")
-        font_bold = ImageFont.load_default()
-        font_text = font_bold
-        font_time = font_bold
-
-    # Перенос текста
-    max_text_width = width - padding_left - avatar_size - avatar_gap - padding_right
-
-    # Считаем перенос через реальную ширину символов
-    dummy_img = Image.new("RGB", (1, 1))
-    dummy_draw = ImageDraw.Draw(dummy_img)
-
-    words = text.split()
-    lines = []
-    current_line = ""
-    for word in words:
-        test_line = current_line + (" " if current_line else "") + word
-        w = dummy_draw.textlength(test_line, font=font_text)
-        if w <= max_text_width:
-            current_line = test_line
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = word
-    if current_line:
-        lines.append(current_line)
-
-    if not lines:
-        lines = [""]
-
-    line_height = int(text_size * 1.375)  # Discord line-height ≈ 1.375
-
-    # Высота
-    name_block_height = name_size + int(4 * scale)
-    text_block_height = line_height * len(lines)
-    content_height = name_block_height + text_block_height
-    total_height = max(
-        avatar_size + padding_top + padding_bottom,
-        content_height + padding_top + padding_bottom
-    )
-    # Добавляем немного снизу для воздуха
-    total_height += int(4 * scale)
-
-    # Создаём картинку — цвет фона Discord тёмной темы
-    BG_COLOR = (49, 51, 56)  # #313338 — основной фон Discord
-    img = Image.new("RGB", (width, total_height), BG_COLOR)
-    draw = ImageDraw.Draw(img)
-
-    # Hover эффект (чуть светлее полоска слева как в Discord при наведении)
-    # Можно убрать если не нужно
-    # draw.rectangle([(0, 0), (3*scale, total_height)], fill=(88, 101, 242))
-
-    # Аватарка круглая
-    avatar_img = Image.open(BytesIO(avatar_data)).convert("RGBA").resize(
-        (avatar_size, avatar_size), Image.LANCZOS
-    )
-    mask = Image.new("L", (avatar_size * 4, avatar_size * 4), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.ellipse((0, 0, avatar_size * 4 - 1, avatar_size * 4 - 1), fill=255)
-    mask = mask.resize((avatar_size, avatar_size), Image.LANCZOS)
-    avatar_circle = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
-    avatar_circle.paste(avatar_img, (0, 0))
-    avatar_circle.putalpha(mask)
-
-    avatar_x = padding_left
-    avatar_y = padding_top
-    img.paste(avatar_circle, (avatar_x, avatar_y), avatar_circle)
-
-    # Позиции текста
-    text_x = avatar_x + avatar_size + avatar_gap
-    name_y = padding_top - int(2 * scale)  # Небольшая корректировка
-
-    # Цвет имени
-    name_color = (255, 255, 255)
-    if hasattr(author, 'color') and author.color.value != 0:
-        name_color = (author.color.r, author.color.g, author.color.b)
-
-    # Имя
-    draw.text((text_x, name_y), author.display_name, font=font_bold, fill=name_color)
-
-    # Время
-    import datetime
-    now = datetime.datetime.now()
-    time_str = f"Сегодня в {now.strftime('%H:%M')}"
-
-    try:
-        name_width = int(font_bold.getlength(author.display_name))
-    except:
-        name_width = len(author.display_name) * name_size // 2
-
-    time_x = text_x + name_width + int(8 * scale)
-    time_y = name_y + int((name_size - time_size) / 2) + int(3 * scale)
-    draw.text((time_x, time_y), time_str, font=font_time, fill=(148, 155, 164))
-
-    # Текст сообщения — цвет #dcddde
-    msg_y = name_y + name_block_height
-    TEXT_COLOR = (220, 221, 222)
-    for line in lines:
-        draw.text((text_x, msg_y), line, font=font_text, fill=TEXT_COLOR)
-        msg_y += line_height
-
-    # Уменьшаем до нормального размера (антиалиасинг)
-    final_width = width // scale
-    final_height = total_height // scale
-    img = img.resize((final_width, final_height), Image.LANCZOS)
-
-    # Отправляем
-    buffer = BytesIO()
-    img.save(buffer, format="PNG")
-    buffer.seek(0)
-
-    await ctx.send(file=discord.File(buffer, filename="message.png"))
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
-@bot.command(name="send")
-async def send_cmd(ctx, url: str = None):
-    if not url:
-        return await ctx.send("❌ Укажи ссилку епанад: `!send <ссилка>`")
-
-    is_tiktok = "tiktok.com" in url
-    is_youtube = "youtube.com/shorts" in url or "youtu.be" in url
-
-    if not is_tiktok and not is_youtube:
-        return await ctx.send("❌ Поддершиваются толька TikTok и YouTube Shorts!")
-
-    status_msg = await ctx.send("⏳ Скачиваю видосек...")
-
-    try:
-        import tempfile, os, subprocess
-
-        tmp_dir = tempfile.gettempdir()
-
-        ydl_opts = {
-            "format": "best[ext=mp4]/best",
-            "quiet": True,
-            "noplaylist": True,
-            "outtmpl": os.path.join(tmp_dir, "%(id)s.%(ext)s"),
-            "ffmpeg_location": "C:/Users/Алина/Downloads/ffmpeg-master-latest-win64-gpl-shared/ffmpeg-master-latest-win64-gpl-shared/bin/",
-        }
-
-        loop = asyncio.get_event_loop()
-
-        def download_video():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                if not filename.endswith(".mp4"):
-                    filename = filename.rsplit(".", 1)[0] + ".mp4"
-                return filename, info.get("title", "video"), info.get("duration", 60)
-
-        filename, title, duration = await loop.run_in_executor(None, download_video)
-
-        if not os.path.exists(filename):
-            return await status_msg.edit(content="❌ Файл не найден пляд")
-
-        MAX_SIZE = 25 * 1024 * 1024  # 25 МБ лимит Discord
-        actual_size = os.path.getsize(filename)
-
-        compressed_filename = None
-
-        if actual_size > MAX_SIZE:
-            await status_msg.edit(content=f"⏳ Видео {actual_size // 1024 // 1024} МБ — сжимаю...")
-
-            compressed_filename = os.path.join(tmp_dir, "compressed_video.mp4")
-
-            # Считаем нужный битрейт чтобы уложиться в 24 МБ
-            target_size_bits = 24 * 1024 * 1024 * 8
-            duration = max(duration, 1)
-            audio_bitrate = 64000  # 64k для аудио
-            video_bitrate = int((target_size_bits / duration) - audio_bitrate)
-            video_bitrate_k = max(video_bitrate // 1000, 100)  # минимум 100k
-
-            ffmpeg_path = "C:/Users/Алина/Downloads/ffmpeg-master-latest-win64-gpl-shared/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe"
-
-            def compress():
-                # Двухпроходное сжатие для точного размера
-                log_file = os.path.join(tmp_dir, "ffmpeg2pass")
-
-                # Проход 1
-                subprocess.run([
-                    ffmpeg_path, "-y",
-                    "-i", filename,
-                    "-c:v", "libx264",
-                    "-b:v", f"{video_bitrate_k}k",
-                    "-pass", "1",
-                    "-passlogfile", log_file,
-                    "-an",
-                    "-f", "null", "NUL"
-                ], capture_output=True)
-
-                # Проход 2
-                subprocess.run([
-                    ffmpeg_path, "-y",
-                    "-i", filename,
-                    "-c:v", "libx264",
-                    "-b:v", f"{video_bitrate_k}k",
-                    "-pass", "2",
-                    "-passlogfile", log_file,
-                    "-c:a", "aac",
-                    "-b:a", "64k",
-                    compressed_filename
-                ], capture_output=True)
-
-            await loop.run_in_executor(None, compress)
-
-            if not os.path.exists(compressed_filename):
-                os.remove(filename)
-                return await status_msg.edit(content="❌ Ошипка сшатия видео")
-
-            final_size = os.path.getsize(compressed_filename)
-
-            if final_size > MAX_SIZE:
-                os.remove(filename)
-                os.remove(compressed_filename)
-                return await status_msg.edit(
-                    content=f"❌ Даше после сшатия видеа слишком большое ахуед ({final_size // 1024 // 1024} МБ). Попробуй более короткое видео."
-                )
-
-            send_file = compressed_filename
-        else:
-            send_file = filename
-
-        file = discord.File(send_file, filename="video.mp4")
-
-        if ctx.message.reference:
-            ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            await ref_msg.reply(file=file, content=f"🎬 **{title}**")
-        else:
-            await ctx.send(file=file, content=f"🎬 **{title}**")
-
-        await status_msg.delete()
-
-        # Чистим временные файлы
-        os.remove(filename)
-        if compressed_filename and os.path.exists(compressed_filename):
-            os.remove(compressed_filename)
-
-    except yt_dlp.utils.DownloadError as e:
-        await status_msg.edit(content=f"❌ Ошибка скачивания поше: {e}")
-    except discord.HTTPException as e:
-        await status_msg.edit(content=f"❌ Ошибка отправкие пляд: {e}")
-    except Exception as e:
-        await status_msg.edit(content=f"❌ Ошибка саепала: {e}")
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
-@bot.command(name="ai")
-async def ai_cmd(ctx, *, prompt: str = None):
-    if not prompt:
-        return await ctx.send("❌ Укажи текст: `!ai привет`")
-
-    uid = str(ctx.author.id)
-    ai_history.setdefault(uid, [])
-    ai_history[uid].append({"role": "user", "content": prompt})
-
-    if len(ai_history[uid]) > 20:
-        ai_history[uid] = ai_history[uid][-20:]
-
-    save_data()
-    thinking_msg = await ctx.send("⏳ Думаю...")
-
-    try:
-        import uuid
-        import ssl
-
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
-
-        async with aiohttp.ClientSession(connector=connector) as session:
-
-            # Получаем токен
-            async with session.post(
-                "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
-                headers={
-                    "Authorization": "Basic MDE5ZGQ4ZjctZmIzYi03NzU2LTk1MDItYzQ4ZDI1MjRhNDg0OmZlNjg2NDlmLTk4NjctNDQyNy04YTIwLWJlZDgwNmNkNTRiYw==",
-                    "RqUID": str(uuid.uuid4()),
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Accept": "application/json"
-                },
-                data="scope=GIGACHAT_API_PERS"
-            ) as resp:
-                token_data = await resp.json(content_type=None)
-                token = token_data["access_token"]
-
-            # Отправляем запрос к GigaChat
-            async with session.post(
-                "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                json={
-                    "model": "GigaChat",
-                    "messages": [
-                        {"role": "system", "content": ai_system_prompt}
-                    ] + ai_history[uid]
-                }
-            ) as resp:
-                data = await resp.json(content_type=None)
-                reply = data["choices"][0]["message"]["content"]
-
-        ai_history[uid].append({"role": "assistant", "content": reply})
-        save_data()
-
-        await thinking_msg.delete()
-        chunks = [reply[i:i+2000] for i in range(0, len(reply), 2000)]
-        for chunk in chunks:
-            await ctx.send(chunk)
-
-    except Exception as e:
-        await thinking_msg.edit(content=f"❌ Ошибка: {e}")
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
 # =========================
 # 💕 СИСТЕМА ОТНОШЕНИЙ
 # =========================
-# Вставь этот код в своего бота перед строкой bot.run(...)
-# Также добавь "relationships": {} в save_data() и load_data()
 
-relationships = {}      # {user_id: partner_id}
-love_points = {}        # {user_id: int}
-pregnancy = {}          # {user_id: {"weeks": int, "uzi": 0, "tests": 0, "birth_chance": 100}}
-children = {}           # {parent_id: [child_id, ...]}
+relationships = {}
+love_points = {}
+pregnancy = {}
+children = {}
 
-pending_proposals = {}  # {target_id: proposer_id} — заявки на отношения
-pending_sex = {}        # {target_id: proposer_id} — заявки на романтический вечер
-pending_child = {}      # {target_id: parent_id}   — заявки на усыновление
+pending_proposals = {}
+pending_sex = {}
+pending_child = {}
 
 
 def get_love(uid):
@@ -2061,8 +1700,6 @@ def break_up(uid1, uid2):
     relationships.pop(str(uid1), None)
     relationships.pop(str(uid2), None)
 
-
-# ── !отн ──────────────────────────────────────────────────────────────────────
 
 @bot.command(name="отн")
 async def otnosheniya(ctx):
@@ -2131,8 +1768,6 @@ async def otnosheniya(ctx):
     )
 
 
-# ── !разойтись ────────────────────────────────────────────────────────────────
-
 @bot.command(name="разойтись")
 async def razoyties(ctx):
     uid = str(ctx.author.id)
@@ -2144,14 +1779,11 @@ async def razoyties(ctx):
     await ctx.send(f"💔 {ctx.author.mention} разорвал(а) отношения с <@{partner_id}>...")
 
 
-# ── Вспомогательная проверка: оба в отношениях друг с другом ──────────────────
-
 def check_couple(author_id, target_id):
     return get_partner(str(author_id)) == str(target_id)
 
 
 async def require_partner(ctx, action_name="это"):
-    """Возвращает (partner_member, True) или (None, False)"""
     uid = str(ctx.author.id)
     partner_id = get_partner(uid)
     if not partner_id:
@@ -2163,8 +1795,6 @@ async def require_partner(ctx, action_name="это"):
         return None, False
     return partner, True
 
-
-# ── !поцеловать ───────────────────────────────────────────────────────────────
 
 @bot.command(name="поцеловать")
 async def potselovat(ctx):
@@ -2182,8 +1812,6 @@ async def potselovat(ctx):
     )
 
 
-# ── !чмокнуть ─────────────────────────────────────────────────────────────────
-
 @bot.command(name="чмокнуть")
 async def chmoknut(ctx):
     partner, ok = await require_partner(ctx)
@@ -2200,8 +1828,6 @@ async def chmoknut(ctx):
     )
 
 
-# ── !шлепнуть ─────────────────────────────────────────────────────────────────
-
 @bot.command(name="шлепнуть")
 async def shlepnut(ctx):
     partner, ok = await require_partner(ctx)
@@ -2217,8 +1843,6 @@ async def shlepnut(ctx):
         f"💖 +{gain} очков любви | Всего у вас: **{total}** ❤️"
     )
 
-
-# ── !секс (романтический вечер) ───────────────────────────────────────────────
 
 @bot.command(name="секс")
 async def romance_evening(ctx):
@@ -2244,19 +1868,17 @@ async def romance_evening(ctx):
             add_love(ctx.author.id, gain)
             add_love(partner.id, gain)
 
-            # Шанс 1 к 3 на беременность (если ещё не беременны)
             pregnant = False
             preggo_id = None
 
             if (str(ctx.author.id) not in pregnancy and
                     str(partner.id) not in pregnancy and
                     random.randint(1, 3) == 1):
-                # Случайно выбираем кто будет «носить» (первый из пары)
                 preggo_id = str(ctx.author.id)
                 pregnancy[preggo_id] = {
                     "partner": str(partner.id),
-                    "uzi": 0,        # выполнено УЗИ (нужно 2)
-                    "tests": 0,      # сданы анализы (нужно 3)
+                    "uzi": 0,
+                    "tests": 0,
                     "birth_chance": 100
                 }
                 pregnant = True
@@ -2305,8 +1927,6 @@ async def romance_evening(ctx):
     )
 
 
-# ── !узи ──────────────────────────────────────────────────────────────────────
-
 @bot.command(name="узи")
 async def uzi_cmd(ctx):
     uid = str(ctx.author.id)
@@ -2334,8 +1954,6 @@ async def uzi_cmd(ctx):
         + (f"Осталось УЗИ: {remaining}" if remaining > 0 else "✅ Все УЗИ сделаны!")
     )
 
-
-# ── !анализы ──────────────────────────────────────────────────────────────────
 
 @bot.command(name="анализы")
 async def analizy_cmd(ctx):
@@ -2365,8 +1983,6 @@ async def analizy_cmd(ctx):
     )
 
 
-# ── !роды ─────────────────────────────────────────────────────────────────────
-
 @bot.command(name="роды")
 async def rody_cmd(ctx):
     uid = str(ctx.author.id)
@@ -2376,7 +1992,6 @@ async def rody_cmd(ctx):
 
     preg = pregnancy[uid]
 
-    # Рассчитываем итоговый шанс
     missed_actions = (2 - preg["uzi"]) + (3 - preg["tests"])
     birth_chance = max(0, 100 - missed_actions * 20)
 
@@ -2406,8 +2021,6 @@ async def rody_cmd(ctx):
         )
 
 
-# ── !ребенок ──────────────────────────────────────────────────────────────────
-
 @bot.command(name="ребенок")
 async def rebenok_cmd(ctx):
     if not ctx.message.reference:
@@ -2429,7 +2042,6 @@ async def rebenok_cmd(ctx):
     uid = str(author.id)
     partner_id = get_partner(uid)
 
-    # Проверяем что у пары есть «слот» для ребёнка (были роды)
     if uid not in children and (not partner_id or partner_id not in children):
         return await ctx.send(
             "❌ У вас пока нет ребёнка! Сначала используй `!секс` → `!узи` → `!анализы` → `!роды`"
@@ -2489,8 +2101,6 @@ async def rebenok_cmd(ctx):
     )
 
 
-# ── !семья ────────────────────────────────────────────────────────────────────
-
 @bot.command(name="семья")
 async def semya_cmd(ctx):
     uid = str(ctx.author.id)
@@ -2523,8 +2133,6 @@ async def semya_cmd(ctx):
     await ctx.send("\n".join(lines))
 
 
-# ── !любовьтоп ────────────────────────────────────────────────────────────────
-
 @bot.command(name="любовьтоп")
 async def love_top_cmd(ctx):
     if not love_points:
@@ -2540,6 +2148,7 @@ async def love_top_cmd(ctx):
 
     await ctx.send("\n".join(lines))
 
+
 # =========================
 # 🚀 ЗАПУСК БОТА
 # =========================
@@ -2551,4 +2160,11 @@ async def on_ready():
     print(f"Bot ready: {bot.user}")
 
 
-bot.run('')
+# Получаем токен из переменной окружения
+TOKEN = os.getenv("TOKEN", "")
+
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("❌ ОШИБКА: Токен бота не найден в переменной окружения TOKEN")
+    print("❌ Добавь TOKEN в .env файл!")
